@@ -8,7 +8,7 @@ long_description = str(long_description) + '\n___\n' + 'Check on GitHub: ' + '\n
 
 setuptools.setup(
     name='scrawler_itau',
-    version='___CIVERSION___',
+    version='0.0.1',
     author='Marcell Biemann',
     author_email='mbiemann@gmail.com',
     description='Extrator de dados bancários do Itaú utilizando Selenium',
@@ -26,6 +26,6 @@ setuptools.setup(
     packages=['scrawler_itau'],
     python_requires='>=3.6',
     install_requires=[
-        'selenium'
+        'selenium==3.141.0'
     ],
 )
