@@ -1,6 +1,7 @@
 import datetime
 import time
 import random
+import logging
 
 from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
@@ -8,17 +9,21 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
+from selenium.common.exceptions import TimeoutException
+
+logging.basicConfig(
+    format='[%(asctime)s] %(name)s {%(filename)s:%(lineno)d} %(levelname)s - %(message)s', 
+    level=logging.INFO
+)
 
 class ExtratoTipo(object):
     Futuro = 'futuro'
-    Ultimos3dias = '3'
-    Ultimos5dias = '5'
-    Ultimos7dias = '7'
-    Ultimos15dias = '15'
-    Ultimos30dias = '30'
-    Ultimos60dias = '60'
-    Ultimos90dias = '90'
-    MesCompleto = 'mesCompleto'
+    Ultimos7dias = 'últimos 7 dias'
+    Ultimos15dias = 'últimos 15 dias'
+    Ultimos30dias = 'últimos 30 dias'
+    Ultimos60dias = 'últimos 60 dias'
+    Ultimos90dias = 'últimos 90 dias'
+    MesCompleto = 'mês completo (desde 2002)'
 
 class CartaoFaturaTipo(object):
     Atual = 0
@@ -62,15 +67,14 @@ class ScrawlerItau:
 
     cartao_fatura_ref = {}
 
-    def __init__(self, agencia, conta, nome, senha):
+    def __init__(self, agencia, conta, senha):
         self._agencia = agencia
         self._conta = conta
-        self._nome = nome
         self._senha = senha
 
     def _expand_home(self):
 
-        # expandir Cartões, se necessário
+        logging.info('expandir cartões, se necessário')
         tries = 1
         while True:
             try:
@@ -88,7 +92,7 @@ class ScrawlerItau:
                     pass
             tries += 1
 
-        # expandir Saldo e Extrato da Conta, se necessário
+        logging.info('expandir saldo e extrado da conta, se necessário')
         tries = 1
         while True:
             try:
@@ -106,39 +110,26 @@ class ScrawlerItau:
                     pass
             tries += 1
 
-    def open(self, driver_path):
+    def open(self):
 
-        # abrir browser e acessar site
-        self.s_driver = webdriver.Firefox(executable_path=driver_path)
+        # https://www.bacancytechnology.com/qanda/qa-automation/configuring-geckodriver-in-linux-to-use-with-selenium
+        # https://www.omgubuntu.co.uk/2022/04/how-to-install-firefox-deb-apt-ubuntu-22-04#:%7E:text=Installing%20Firefox%20via%20Apt%20(Not%20Snap)&text=You%20add%20the%20Mozilla%20Team,%2C%20bookmarks%2C%20and%20other%20data.
+        logging.info('abrir browser e acessar site')
+        self.s_driver = webdriver.Firefox()
         self.s_driver.get('http://www.itau.com.br')
         self.s_wait = WebDriverWait(self.s_driver,10)
         self.s_action = ActionChains(self.s_driver)
 
-        # inserir agência e conta
         time.sleep(3)
-        s_elem = self.s_wait.until(EC.visibility_of_element_located((By.ID,'agencia')))
+        logging.info('inserir agência e conta')
+        s_elem = self.s_wait.until(EC.visibility_of_element_located((By.ID,'idl-menu-agency')))
         s_elem.send_keys(self._agencia)
-        s_elem = self.s_wait.until(EC.visibility_of_element_located((By.ID,'conta')))
+        s_elem = self.s_wait.until(EC.visibility_of_element_located((By.ID,'idl-menu-account')))
         s_elem.send_keys(self._conta)
         s_elem.send_keys(Keys.RETURN)
 
-        # escolher nome
-        time.sleep(3)
-        tries = 1
-        click = False
-        while not click:
-            try:
-                time.sleep(3)
-                s_elem = self.s_wait.until(EC.visibility_of_element_located((By.LINK_TEXT,self._nome)))
-                s_elem.click()
-                click = True
-            except Exception as e:
-                if tries == 3:
-                    raise e
-                tries += 1
-
-        # inserir senha
         time.sleep(4)
+        logging.info('inserir senha')
         for digito in self._senha:
             tries = 1
             click = False
@@ -155,8 +146,10 @@ class ScrawlerItau:
         s_elem = self.s_wait.until(EC.visibility_of_element_located((By.PARTIAL_LINK_TEXT,'acessar')))
         s_elem.click()
 
+        logging.info('aguardar carregamento inicial')
         time.sleep(6)
 
+        logging.info('expandir home')
         self._expand_home()
         time.sleep(3)
         self.last_location = 'home'
@@ -165,7 +158,7 @@ class ScrawlerItau:
         if self.last_location == 'home':
             return
         
-        # ir para página inicial
+        logging.info('ir para página inicial')
         tries = 1
         while True:
             try:
@@ -182,6 +175,7 @@ class ScrawlerItau:
                     pass
             tries += 1
 
+        logging.info('expandir home')
         self._expand_home()
         time.sleep(3)
         self.last_location = 'home'
@@ -199,7 +193,6 @@ class ScrawlerItau:
         return saldo
 
     def get_extrato(self, tipo, mes=0, ano=0):
-
         if tipo == ExtratoTipo.MesCompleto:
             if not (mes >= 1 and mes <= 12):
                 raise MesAnoException('Parâmetros mes e/ou ano inválido(s).')
@@ -223,8 +216,14 @@ class ScrawlerItau:
         while True:
             try:
                 time.sleep(3)
-                s_elem = self.s_wait.until(EC.visibility_of_element_located((By.CLASS_NAME,'select__options')))
-                Select(s_elem).select_by_value(ExtratoTipo.Ultimos3dias if tipo == ExtratoTipo.Futuro else tipo)
+                s_elem = self.s_wait.until(EC.visibility_of_element_located((By.ID,'periodoFiltro')))
+                s_elem.click()
+
+                s_elem_list = self.s_wait.until(EC.visibility_of_element_located((By.ID,'periodoFiltroList')))
+                for option in s_elem_list.find_elements(By.CLASS_NAME, 'form-element-group__select-option'):
+                    if tipo == option.text.strip():
+                        option.click()
+                        break
                 break
             except Exception as e:
                 if tries == 3:
@@ -239,33 +238,35 @@ class ScrawlerItau:
 
             # clicar em lançamentos futuros
             time.sleep(3)
-            s_elem = self.s_wait.until(EC.element_to_be_clickable((By.ID,'btn-aba-lancamentos-futuros')))
+            s_elem = self.s_wait.until(EC.presence_of_element_located((By.ID,'btn-aba-lancamentos-futuros')))
             s_elem.click()
 
             # extrair lançamentos futuros
-            time.sleep(3)
-            s_elem = self.s_wait.until(EC.presence_of_element_located((By.ID,'corpo-tabela-lancamentos-futuros'))) \
-                .find_elements_by_class_name('table-extract__row')
-            for s_elem_row in s_elem:
-                s_elem_cols = s_elem_row.find_elements_by_tag_name('div')
-                date = datetime.datetime.strptime(s_elem_cols[0].text.strip(),'%d/%m/%Y').strftime('%Y-%m-%d')
-                name = s_elem_cols[1].text.strip()
-                value = 0 - float(s_elem_cols[2].text.strip().replace('.','').replace(',','.'))
-                
-                dupl_key = date + '|' + name + '|' + str(value)
-                dupl[dupl_key] = dupl.get(dupl_key, 0) + 1
-                if dupl[dupl_key] > 1:
-                    name = name + ' ('+str(dupl[dupl_key])+')'
+            try:
+                time.sleep(3)
+                s_elem = self.s_wait.until(EC.presence_of_element_located((By.ID,'corpo-tabela-lancamentos-futuros'))) \
+                    .find_elements_by_class_name('table-extract__row')
+                for s_elem_row in s_elem:
+                    s_elem_cols = s_elem_row.find_elements_by_tag_name('div')
+                    date = datetime.datetime.strptime(s_elem_cols[0].text.strip(),'%d/%m/%Y').strftime('%Y-%m-%d')
+                    name = s_elem_cols[1].text.strip()
+                    value = 0 - float(s_elem_cols[2].text.strip().replace('.','').replace(',','.'))
+                    
+                    dupl_key = f'{date}|{name}|{value}'
+                    dupl[dupl_key] = dupl.get(dupl_key, 0) + 1
+                    if dupl[dupl_key] > 1:
+                        name = f'{name} ({str(dupl[dupl_key])})'
 
-                base.append({
-                    "date": date,
-                    "name": name,
-                    "value": value
-                })
+                    base.append({
+                        "date": date,
+                        "name": name,
+                        "value": value
+                    })
+            except TimeoutException as ex:
+                print(f'TimeoutException has been thrown: {str(ex)}')
 
         # Extrato
         else:
-
             # filtrar período para mês completo
             if tipo == ExtratoTipo.MesCompleto:
 
@@ -273,10 +274,8 @@ class ScrawlerItau:
 
                 filter_date = datetime.date(ano, mes, 1)
 
-                self.s_driver.execute_script('scrollBy(0,250);')
-
-                s_elem = self.s_wait.until(EC.visibility_of_element_located((By.CLASS_NAME,'month-picker__icon__icon')))
-                s_elem.click()
+                s_elem = self.s_wait.until(EC.visibility_of_element_located((By.CLASS_NAME,'month-picker__icon__placeholder')))
+                self.s_driver.execute_script('arguments[0].click()', s_elem)
 
                 s_elem = self.s_wait.until(EC.visibility_of_element_located((By.CLASS_NAME,'month-picker__input')))
                 s_elem.clear()
@@ -288,18 +287,18 @@ class ScrawlerItau:
             # extrair lançamentos
             time.sleep(3)
             s_elem = self.s_wait.until(EC.presence_of_element_located((By.ID,'extrato-grid-lancamentos')))
-            for s_elem_row in s_elem.find_elements_by_tag_name('tr'):
-                s_elem_cols = s_elem_row.find_elements_by_tag_name('td')
+            for s_elem_row in s_elem.find_elements(By.CLASS_NAME, 'extrato-tabela-pf'):
+                s_elem_cols = s_elem_row.find_elements(By.CLASS_NAME, 'extrato-impressao-zebrado')
                 if len(s_elem_cols) >= 3 and s_elem_cols[2].text.strip() != '':
                     date = datetime.datetime.strptime(s_elem_cols[0].text.strip(),'%d/%m/%Y').strftime('%Y-%m-%d')
                     name = s_elem_cols[1].text.strip()
                     value = float(s_elem_cols[2].text.strip().replace('.','').replace(',','.'))
 
-                    dupl_key = date + '|' + name + '|' + str(value)
+                    dupl_key = f'{date}|{name}|{value}'
                     dupl[dupl_key] = dupl.get(dupl_key, 0) + 1
                     if dupl[dupl_key] > 1:
-                        name = name + ' ('+str(dupl[dupl_key])+')'
-                    
+                        name = f'{name} ({str(dupl[dupl_key])})'
+
                     base.append({
                         "date": date,
                         "name": name,
@@ -311,23 +310,27 @@ class ScrawlerItau:
     def list_cartoes(self):
         self.go_home()
 
-        base = []
+        s_elem_rows = self.s_wait.until(EC.presence_of_element_located((By.ID,'content-cartao-card-accordion')))
 
-        s_elem_rows = self.s_wait.until(EC.presence_of_element_located((By.ID,'content-cartao-card-accordion'))) \
-            .find_element_by_class_name('content-cartoes') \
-            .find_element_by_tag_name('table') \
-            .find_element_by_tag_name('tbody') \
-            .find_elements_by_tag_name('tr')
-        for s_elem_row in s_elem_rows:
-            s_elem_cols = s_elem_row.find_elements_by_tag_name('td')
-            base.append({
-                "name": s_elem_cols[0].find_element_by_class_name('card-name').text.strip(),
-                "due_date": datetime.datetime.strptime(s_elem_cols[1].text.strip(),'%d/%m/%Y').strftime('%Y-%m-%d'),
-                "value": float(s_elem_cols[2].text.strip().replace('.','').replace(',','.')),
-                "status": s_elem_cols[3].text.strip()
-            })
+        def divide_chunks(l, n): 
+            for i in range(0, len(l), n):  
+                yield l[i:i + n] 
 
-        return base
+        def process_content_cartao_card(content_cartao):
+            splited = content_cartao.text.split('\n')
+            splited_without_header = splited[1:]
+            aux = []
+            for splited in divide_chunks(splited_without_header, 3):
+                splited[2] = splited[2].split(' ')
+                aux.append({
+                    "name": splited[0].strip(),
+                    "due_date": datetime.datetime.strptime(splited[2][0],'%d/%m/%Y').strftime('%Y-%m-%d'),
+                    "value": float(splited[2][1].replace('.', '').replace(',', '.')),
+                    "status": splited[2][2]
+                })
+            return aux
+
+        return process_content_cartao_card(s_elem_rows)
 
     def get_cartao_fatura(self, nome, tipo=CartaoFaturaTipo.Atual):
         base = []
